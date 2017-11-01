@@ -5,7 +5,7 @@ import java.io.File
 import com.google.common.primitives.{Bytes, Ints}
 import com.wavesplatform.settings.WalletSettings
 import com.wavesplatform.state2.ByteStr
-import com.wavesplatform.utils.createMVStore
+import com.wavesplatform.utils.createStore
 import org.h2.mvstore.MVMap
 import scorex.account.{Address, PrivateKeyAccount}
 import scorex.crypto.hash.SecureCryptographicHash
@@ -20,7 +20,7 @@ class Wallet private(file: Option[File], password: Array[Char]) extends AutoClos
 
   private val NonceFieldName = "nonce"
 
-  private val database = createMVStore(file, Some(password))
+  private val database = createStore(file, Some(password))
 
   private val accountsPersistence: MVMap[Int, Array[Byte]] = database.openMap("privkeys", new LogMVMapBuilder[Int, Array[Byte]])
   private val seedPersistence: MVMap[String, Array[Byte]] = database.openMap("seed", new LogMVMapBuilder[String, Array[Byte]])
