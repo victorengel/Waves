@@ -2,27 +2,25 @@ package com.wavesplatform.network
 
 import java.net.{InetAddress, InetSocketAddress}
 import java.nio.charset.StandardCharsets
-import java.nio.file.Paths
 
 import com.google.common.base.Charsets
 import com.google.common.collect.EvictingQueue
 import com.google.common.primitives.{Bytes, Longs}
 import com.twitter.chill.{KryoInstantiator, KryoPool}
+import com.wavesplatform.db.SubStorage
 import com.wavesplatform.settings.NetworkSettings
-import com.wavesplatform.utils.createStore
+import org.iq80.leveldb.DB
 import scorex.utils.ScorexLogging
 
 import scala.util.Random
 
-class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with AutoCloseable with ScorexLogging {
+class PeerDatabaseImpl(db: DB, settings: NetworkSettings) extends SubStorage(db, "peers") with PeerDatabase with ScorexLogging {
 
-  private val peersSuffix: Array[Byte] = ":peers".getBytes()
-  private val blacklistedSuffix: Array[Byte] = ":blacklisted".getBytes()
-  private val suspendedSuffix: Array[Byte] = ":suspended".getBytes()
+  private val peersPrefix: Array[Byte] = "peers".getBytes()
+  private val blacklistedPrefix: Array[Byte] = "blacklisted".getBytes()
+  private val suspendedPrefix: Array[Byte] = "suspended".getBytes()
 
   import PeerDatabaseImpl._
-
-  private val table = createStore(Paths.get(settings.path.toString, "peers").toFile)
 
   private val unverifiedPeers = EvictingQueue.create[InetSocketAddress](settings.maxUnverifiedPeers)
 
@@ -36,7 +34,7 @@ class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with Auto
   }
 
   override def addCandidate(socketAddress: InetSocketAddress): Unit = unverifiedPeers.synchronized {
-    if (Option(table.get(makeKey(socketAddress, peersSuffix))).isEmpty && !unverifiedPeers.contains(socketAddress)) {
+    if (get(makeKey(peersPrefix, encodeInetSocketAddress(socketAddress))).isEmpty && !unverifiedPeers.contains(socketAddress)) {
       log.trace(s"Adding candidate $socketAddress")
       unverifiedPeers.add(socketAddress)
     } else {
@@ -46,14 +44,10 @@ class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with Auto
 
   private def doTouch(socketAddress: InetSocketAddress, timestamp: Long): Unit = unverifiedPeers.synchronized {
     unverifiedPeers.removeIf(_ == socketAddress)
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(peersSuffix)) {
-        val prevTs = Longs.fromByteArray(entry.getValue)
-        val ts = Math.max(prevTs, timestamp)
-        table.put(entry.getKey, Longs.toByteArray(ts))
-      }
+    map(peersPrefix, stripPrefix = false).foreach { e =>
+      val prevTs = Longs.fromByteArray(e._2)
+      val ts = Math.max(prevTs, timestamp)
+      put(e._1, Longs.toByteArray(ts))
     }
   }
 
@@ -63,7 +57,7 @@ class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with Auto
     if (settings.enableBlacklisting) {
       unverifiedPeers.synchronized {
         unverifiedPeers.removeIf(_.getAddress == address)
-        table.put(makeKey(address, blacklistedSuffix), encodeBlacklistValue(System.currentTimeMillis(), reason))
+        put(makeKey(blacklistedPrefix, encodeInetAddress(address)), encodeBlacklistValue(System.currentTimeMillis(), reason))
       }
     }
   }
@@ -71,47 +65,33 @@ class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with Auto
   override def suspend(address: InetAddress): Unit = {
     unverifiedPeers.synchronized {
       unverifiedPeers.removeIf(_.getAddress == address)
-      table.put(makeKey(address, suspendedSuffix), Longs.toByteArray(System.currentTimeMillis()))
+      put(makeKey(suspendedPrefix, encodeInetAddress(address)), Longs.toByteArray(System.currentTimeMillis()))
     }
   }
 
   override def knownPeers: Map[InetSocketAddress, Long] = {
-    removeObsoleteRecords(peersSuffix, settings.peersDataResidenceTime.toMillis)
-
-    var result = Map.empty[InetSocketAddress, Long]
-
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(peersSuffix)) {
-        val address = decodeInetSocketAddress(entry.getKey)
-        if (blacklistedHosts.contains(address.getAddress)) {
-          val ts = Longs.fromByteArray(entry.getValue.take(LongSize))
-          result = result.updated(address, ts)
-        }
-      }
-    }
-    result
+    removeObsoleteRecords(peersPrefix, settings.peersDataResidenceTime.toMillis)
+    map(peersPrefix).map(e => decodeInetSocketAddress(e._1) -> Longs.fromByteArray(e._2))
   }
 
   override def blacklistedHosts: Set[InetAddress] = {
-    removeObsoleteRecords(blacklistedSuffix, settings.blackListResidenceTime.toMillis)
-    collectHosts(blacklistedSuffix)
+    removeObsoleteRecords(blacklistedPrefix, settings.blackListResidenceTime.toMillis)
+    map(blacklistedPrefix).map(e => decodeInetAddress(e._1)).toSet
   }
 
   override def suspendedHosts: Set[InetAddress] = {
-    removeObsoleteRecords(suspendedSuffix, settings.suspensionResidenceTime.toMillis)
-    collectHosts(suspendedSuffix)
+    removeObsoleteRecords(suspendedPrefix, settings.suspensionResidenceTime.toMillis)
+    map(suspendedPrefix).map(e => decodeInetAddress(e._1)).toSet
   }
 
   override def detailedBlacklist: Map[InetAddress, (Long, String)] = {
-    removeObsoleteRecords(blacklistedSuffix, settings.blackListResidenceTime.toMillis)
-    collectBlacklistRecords()
+    removeObsoleteRecords(blacklistedPrefix, settings.blackListResidenceTime.toMillis)
+    map(blacklistedPrefix).map(e => decodeInetAddress(e._1) -> decodeBlacklistValue(e._2))
   }
 
   override def detailedSuspended: Map[InetAddress, Long] = {
-    removeObsoleteRecords(suspendedSuffix, settings.suspensionResidenceTime.toMillis)
-    collectSuspendRecords()
+    removeObsoleteRecords(suspendedPrefix, settings.suspensionResidenceTime.toMillis)
+    map(suspendedPrefix).map(e => decodeInetAddress(e._1) -> Longs.fromByteArray(e._2))
   }
 
   override def randomPeer(excluded: Set[InetSocketAddress]): Option[InetSocketAddress] = unverifiedPeers.synchronized {
@@ -134,89 +114,22 @@ class PeerDatabaseImpl(settings: NetworkSettings) extends PeerDatabase with Auto
     }
   }
 
-  private def removeObsoleteRecords(suffix: Array[Byte], maxAge: Long): Unit = {
+  private def removeObsoleteRecords(prefix: Array[Byte], maxAge: Long): Unit = {
     val earliestValidTs = System.currentTimeMillis() - maxAge
-
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(suffix)) {
-        val ts = Longs.fromByteArray(entry.getValue.take(LongSize))
-        if (ts < earliestValidTs) table.delete(entry.getKey)
-      }
+    map(prefix, stripPrefix = false).foreach { e =>
+      val ts = Longs.fromByteArray(e._2.take(LongSize))
+      if (ts < earliestValidTs) delete(e._1)
     }
   }
 
-  private def collectHosts(suffix: Array[Byte]): Set[InetAddress] = {
-    val it = table.iterator()
-    var result = Set.empty[InetAddress]
+  def clearBlacklist(): Unit = map(blacklistedPrefix, stripPrefix = false).foreach(e => delete(e._1))
 
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(suffix)) {
-        val address = decodeInetAddress(entry.getKey)
-        result = result + address
-      }
-    }
-    result
-  }
-
-  private def collectBlacklistRecords(): Map[InetAddress, (Long, String)] = {
-    var result = Map.empty[InetAddress, (Long, String)]
-
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(blacklistedSuffix)) {
-        val address = decodeInetAddress(entry.getKey)
-        val pair = decodeBlacklistValue(entry.getValue)
-        result = result.updated(address, pair)
-      }
-    }
-    result
-  }
-
-  private def collectSuspendRecords(): Map[InetAddress, Long] = {
-    var result = Map.empty[InetAddress, Long]
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(suspendedSuffix)) {
-        val address = decodeInetAddress(entry.getKey)
-        val ts = Longs.fromByteArray(entry.getValue)
-        result = result.updated(address, ts)
-      }
-    }
-    result
-  }
-
-  def clearBlacklist(): Unit = {
-    val it = table.iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      if (entry.getKey.endsWith(blacklistedSuffix)) {
-        table.delete(entry.getKey)
-      }
-    }
-  }
-
-  override def close(): Unit = {
-    table.close()
-  }
 }
 
 object PeerDatabaseImpl {
   private val LongSize = 8
   private val PoolSize = 10
   private val kryo = KryoPool.withByteArrayOutputStream(PoolSize, new KryoInstantiator())
-
-  def makeKey(address: InetAddress, suffix: Array[Byte]): Array[Byte] = {
-    Bytes.concat(encodeInetAddress(address), suffix)
-  }
-
-  def makeKey(socketAddress: InetSocketAddress, suffix: Array[Byte]): Array[Byte] = {
-    Bytes.concat(encodeInetSocketAddress(socketAddress), suffix)
-  }
 
   def encodeBlacklistValue(ts: Long, reason: String): Array[Byte] = {
     Bytes.concat(Longs.toByteArray(ts), reason.getBytes(Charsets.UTF_8))
