@@ -66,7 +66,7 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
     val feeCalculator = new FeeCalculator(settings.feesSettings)
     val time: Time = NTP
 
-    val peerDatabase = new PeerDatabaseImpl(settings.networkSettings)
+    val peerDatabase = new PeerDatabaseImpl(db, settings.networkSettings)
     val establishedConnections = new ConcurrentHashMap[Channel, PeerInfo]
     val allChannels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)
 
@@ -148,7 +148,8 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
     }
 
     if (settings.matcherSettings.enable) {
-      val matcher = new Matcher(actorSystem, wallet, utxStorage, allChannels, stateReader, history, settings.blockchainSettings, settings.restAPISettings, settings.matcherSettings)
+      val matcher = new Matcher(actorSystem, wallet, utxStorage, allChannels, stateReader, history,
+        settings.blockchainSettings, settings.restAPISettings, settings.matcherSettings, db)
       matcher.runMatcher()
     }
   }
