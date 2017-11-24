@@ -19,14 +19,14 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
 
   def seed: Option[Array[Byte]] = get(SeedProperty)
 
-  def nonce(): Int = getInt(NonceProperty).getOrElse(0)
+  def nonce(): Int = getInt(NonceProperty).getOrElse(-1)
 
-  def privateKeyAccounts(): List[PrivateKeyAccount] = map(PrivateKeyPrefix).values.map(PrivateKeyAccount.apply).toList
+  def privateKeyAccounts(): List[PrivateKeyAccount] = map(PrivateKeyPrefix).map(e => PrivateKeyAccount(e._2)).toList
 
   def generateNewAccount(): Option[PrivateKeyAccount] = synchronized {
     val nonce = incrementAndGetNonce()
     val account = Wallet.generateNewAccount(seed.get, nonce)
-    val address = account.address
+    val address = account.toAddress
 
     if (getPrivateKeyAccount(address).isEmpty) {
       putPrivateKeyAccount(account)
@@ -38,14 +38,13 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
     (1 to howMany).flatMap(_ => generateNewAccount())
 
   def deleteAccount(account: PrivateKeyAccount): Boolean = synchronized {
-    getPrivateKeyAccount(account.address).fold(false) { a =>
-      delete(makeKey(PrivateKeyPrefix, a.address))
-      true
-    }
+    val a = getPrivateKeyAccount(account.toAddress)
+    if (a.isDefined) delete(makeKey(PrivateKeyPrefix, a.get.bytes.arr))
+    a.isDefined
   }
 
-  def privateKeyAccount(account: Address): Either[ValidationError, PrivateKeyAccount] =
-    getPrivateKeyAccount(account.address).toRight[ValidationError](MissingSenderPrivateKey)
+  def privateKeyAccount(address: Address): Either[ValidationError, PrivateKeyAccount] =
+    getPrivateKeyAccount(address).toRight[ValidationError](MissingSenderPrivateKey)
 
   def addSeed(seed: Array[Byte]): Unit = if (get(SeedProperty).isEmpty) put(SeedProperty, seed)
 
@@ -55,11 +54,11 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
     nextNonce
   }
 
-  private def getPrivateKeyAccount(address: String): Option[PrivateKeyAccount] =
-    get(makeKey(PrivateKeyPrefix, address)).map(PrivateKeyAccount.apply)
+  private def getPrivateKeyAccount(address: Address): Option[PrivateKeyAccount] =
+    get(makeKey(PrivateKeyPrefix, address.bytes.arr)).map(PrivateKeyAccount.apply)
 
   private def putPrivateKeyAccount(account: PrivateKeyAccount): Unit =
-    put(makeKey(PrivateKeyPrefix, account.address), account.seed)
+    put(makeKey(PrivateKeyPrefix, account.toAddress.bytes.arr), account.seed)
 
 }
 

@@ -12,6 +12,7 @@ import akka.http.scaladsl.server.Route
 import akka.stream.ActorMaterializer
 import com.typesafe.config.{Config, ConfigFactory, ConfigObject}
 import com.wavesplatform.actor.RootActorSystem
+import com.wavesplatform.db.LevelDBFactory
 import com.wavesplatform.features.api.ActivationApiRoute
 import com.wavesplatform.history.{CheckpointServiceImpl, StorageFactory}
 import com.wavesplatform.http.NodeApiRoute
@@ -25,7 +26,6 @@ import io.netty.channel.Channel
 import io.netty.channel.group.DefaultChannelGroup
 import io.netty.util.concurrent.GlobalEventExecutor
 import kamon.Kamon
-import org.fusesource.leveldbjni.JniDBFactory
 import org.influxdb.dto.Point
 import org.iq80.leveldb.Options
 import org.slf4j.bridge.SLF4JBridgeHandler
@@ -47,7 +47,7 @@ import scala.util.Try
 
 class Application(val actorSystem: ActorSystem, val settings: WavesSettings, configRoot: ConfigObject) extends ScorexLogging {
 
-  private val db = Application.openDB(settings.directory)
+  private val db = Application.openDB(settings.dataDirectory)
 
   private val checkpointService = new CheckpointServiceImpl(db, settings.checkpointsSettings)
   private val (history, featureProvider, stateReader, blockchainUpdater, blockchainDebugInfo) = StorageFactory(db, settings).get
@@ -234,7 +234,7 @@ object Application extends ScorexLogging {
 
     val file = new File(path)
     file.getParentFile.mkdirs()
-    JniDBFactory.factory.open(file, options)
+    LevelDBFactory.factory.open(file, options)
   }
 
   def main(args: Array[String]): Unit = {

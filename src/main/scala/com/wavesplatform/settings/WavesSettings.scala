@@ -6,7 +6,6 @@ import com.wavesplatform.metrics.Metrics
 import net.ceedubs.ficus.Ficus._
 import net.ceedubs.ficus.readers.ArbitraryTypeReader._
 import net.ceedubs.ficus.readers.EnumerationReader._
-import net.ceedubs.ficus.readers.URIReaders.javaURIReader
 
 object LogLevel extends Enumeration {
   val TRACE = Value("TRACE")
@@ -17,7 +16,7 @@ object LogLevel extends Enumeration {
 }
 
 case class WavesSettings(directory: String,
-                         mvstorePageSplitSize: Int,
+                         dataDirectory: String,
                          loggingLevel: LogLevel.Value,
                          networkSettings: NetworkSettings,
                          walletSettings: WalletSettings,
@@ -40,9 +39,8 @@ object WavesSettings {
 
   def fromConfig(config: Config): WavesSettings = {
     val directory = config.as[String](s"$configPath.directory")
-    val pageSplitSize = config.as[Int](s"$configPath.mvstore-page-split-size")
+    val dataDirectory = config.as[String](s"$configPath.data-directory")
     val loggingLevel = config.as[LogLevel.Value](s"$configPath.logging-level")
-
     val networkSettings = config.as[NetworkSettings]("waves.network")
     val walletSettings = config.as[WalletSettings]("waves.wallet")
     val blockchainSettings = BlockchainSettings.fromConfig(config)
@@ -56,7 +54,7 @@ object WavesSettings {
     val featuresSettings = config.as[FeaturesSettings]("waves.features")
     val metrics = config.as[Metrics.Settings]("metrics")
 
-    WavesSettings(directory, pageSplitSize, loggingLevel, networkSettings, walletSettings, blockchainSettings, checkpointsSettings,
+    WavesSettings(directory, dataDirectory, loggingLevel, networkSettings, walletSettings, blockchainSettings, checkpointsSettings,
       feesSettings, matcherSettings, minerSettings, restAPISettings, synchronizationSettings, utxSettings,
       featuresSettings, metrics)
   }
