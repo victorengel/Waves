@@ -24,7 +24,6 @@ case class MatcherSettings(enable: Boolean,
                            maxTimestampDiff: FiniteDuration,
                            blacklistedAssets: Set[String],
                            blacklistedNames: Seq[Regex],
-                           txHistoryFile: Option[File],
                            restOrderLimit: Int,
                           )
 
@@ -56,6 +55,6 @@ object MatcherSettings {
 
     MatcherSettings(enabled, account, bindAddress, port, minOrderFee, orderMatchTxFee, journalDirectory,
       snapshotsDirectory, snapshotsInterval, orderCleanupInterval, maxOpenOrders, baseAssets, basePairs, maxTimestampDiff,
-      orderHistoryFile, isMigrateToNewOrderHistoryStorage, blacklistedAssets.toSet, blacklistedNames, txHistoryFile, restOrderLimit)
+      blacklistedAssets.toSet, blacklistedNames, restOrderLimit)
   }
 }
