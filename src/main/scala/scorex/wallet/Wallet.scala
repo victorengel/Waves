@@ -1,9 +1,9 @@
 package scorex.wallet
 
 import com.google.common.primitives.{Bytes, Ints}
-import com.wavesplatform.db.{PropertiesStorage, SubStorage}
+import com.wavesplatform.db.{ByteStrSeqCodec, PropertiesStorage, SubStorage}
 import com.wavesplatform.settings.WalletSettings
-import com.wavesplatform.state2.ByteStr
+import com.wavesplatform.state2._
 import org.iq80.leveldb.DB
 import scorex.account.{Address, PrivateKeyAccount}
 import scorex.crypto.hash.SecureCryptographicHash
@@ -16,12 +16,13 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
   private val NonceProperty = "nonce"
   private val SeedProperty = "seed"
   private val PrivateKeyPrefix = "sk".getBytes(Charset)
+  private val indexKey = makeKey("sk-index".getBytes(Charset), 0)
 
   def seed: Option[Array[Byte]] = get(SeedProperty)
 
   def nonce(): Int = getInt(NonceProperty).getOrElse(-1)
 
-  def privateKeyAccounts(): List[PrivateKeyAccount] = map(PrivateKeyPrefix).map(e => PrivateKeyAccount(e._2)).toList
+  def privateKeyAccounts(): List[PrivateKeyAccount] = allAddresses().flatMap(a => getPrivateKeyAccount(a)).toList
 
   def generateNewAccount(): Option[PrivateKeyAccount] = synchronized {
     val nonce = incrementAndGetNonce()
@@ -38,9 +39,11 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
     (1 to howMany).flatMap(_ => generateNewAccount())
 
   def deleteAccount(account: PrivateKeyAccount): Boolean = synchronized {
-    val a = getPrivateKeyAccount(account.toAddress)
-    if (a.isDefined) delete(makeKey(PrivateKeyPrefix, a.get.bytes.arr))
-    a.isDefined
+    val address = account.toAddress
+    if (getPrivateKeyAccount(address).isDefined) {
+      deletePrivateKeyAccount(address)
+      true
+    } else false
   }
 
   def privateKeyAccount(address: Address): Either[ValidationError, PrivateKeyAccount] =
@@ -57,9 +60,25 @@ class Wallet private(db: DB, password: Array[Char]) extends SubStorage(db, "wall
   private def getPrivateKeyAccount(address: Address): Option[PrivateKeyAccount] =
     get(makeKey(PrivateKeyPrefix, address.bytes.arr)).map(PrivateKeyAccount.apply)
 
-  private def putPrivateKeyAccount(account: PrivateKeyAccount): Unit =
+  private def putPrivateKeyAccount(account: PrivateKeyAccount): Unit = {
+    val addresses = allAddresses() :+ account.toAddress
     put(makeKey(PrivateKeyPrefix, account.toAddress.bytes.arr), account.seed)
+    put(indexKey, ByteStrSeqCodec.encode(addresses.distinct.map(a => a.bytes)))
+  }
 
+  private def deletePrivateKeyAccount(address: Address): Unit = {
+    delete(makeKey(PrivateKeyPrefix, address.bytes.arr))
+    val addresses = allAddresses().filterNot(a => a == address).map(a => a.bytes).distinct
+    put(indexKey, ByteStrSeqCodec.encode(addresses))
+  }
+
+  private def allAddresses(): Seq[Address] = {
+    get(indexKey).map(ByteStrSeqCodec.decode).map(_.explicitGet().value).map { s =>
+      s.map { bs =>
+        Address.fromBytes(bs.arr).explicitGet()
+      }
+    }.getOrElse(Seq.empty)
+  }
 }
 
 object Wallet extends ScorexLogging {
